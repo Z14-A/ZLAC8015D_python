@@ -1,19 +1,20 @@
+#! /usr/bin/python3
 
-from pymodbus.client.sync import ModbusSerialClient as ModbusClient
+from pymodbus.client import ModbusSerialClient as ModbusClient
 import numpy as np
 
 class Controller:
 
 	def __init__(self, port="/dev/ttyUSB0"):
-
+		
 		self._port = port
 
-		self.client = ModbusClient(method='rtu', port=self._port, baudrate=115200, timeout=1)
+		self.client = ModbusClient(method='rtu', port=self._port, baudrate=115200, timeout=0.015)
 
 		self.client.connect()
 
 		self.ID = 1
-
+		
 		######################
 		## Register Address ##
 		######################
@@ -24,7 +25,7 @@ class Controller:
 		self.R_ACL_TIME = 0x2081
 		self.L_DCL_TIME = 0x2082
 		self.R_DCL_TIME = 0x2083
-
+		
 		## Velocity control
 		self.L_CMD_RPM = 0x2088
 		self.R_CMD_RPM = 0x2089
@@ -93,10 +94,10 @@ class Controller:
 		##############
 		## Odometry ##
 		##############
-		## 8 inches wheel
-		self.travel_in_one_rev = 0.655
-		self.cpr = 16385
-		self.R_Wheel = 0.105 #meter
+		## 6.75 inches wheel
+		self.cpr = 16384
+		self.wheel_radius = 0.0846375#meter
+		self.travel_in_one_rev = 2*np.pi*self.wheel_radius
 
 	## Some time if read immediatly after write, it would show ModbusIOException when get data from registers
 	def modbus_fail_read_handler(self, ADDR, WORD):
@@ -104,9 +105,11 @@ class Controller:
 		read_success = False
 		reg = [None]*WORD
 		while not read_success:
-			result = self.client.read_holding_registers(ADDR, WORD, unit=self.ID)
+			result = self.client.read_holding_registers(ADDR, WORD, self.ID)
+
 			try:
 				for i in range(WORD):
+					
 					reg[i] = result.registers[i]
 				read_success = True
 			except AttributeError as e:
@@ -117,13 +120,15 @@ class Controller:
 
 	def rpm_to_radPerSec(self, rpm):
 		return rpm*2*np.pi/60.0
+	
+	def radPerSec_to_rpm(self, radPerSec):
+		return radPerSec*30/np.pi
 
 	def rpm_to_linear(self, rpm):
-
-		W_Wheel = self.rpm_to_radPerSec(rpm)
-		V = W_Wheel*self.R_Wheel
-
-		return V
+		return self.rpm_to_radPerSec(rpm)*self.wheel_radius
+	
+	def linear_to_rpm(self, mps):
+		return self.radPerSec_to_rpm(mps/self.wheel_radius)
 
 	def set_mode(self, MODE):
 		if MODE == 1:
@@ -150,9 +155,12 @@ class Controller:
 
 	def enable_motor(self):
 		result = self.client.write_register(self.CONTROL_REG, self.ENABLE, unit=self.ID)
+		return result.isError()
 
 	def disable_motor(self):
 		result = self.client.write_register(self.CONTROL_REG, self.DOWN_TIME, unit=self.ID)
+		return result.isError()
+
 
 	def get_fault_code(self):
 
